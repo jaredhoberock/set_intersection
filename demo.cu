@@ -434,6 +434,11 @@ template<typename Size, typename InputIterator1, typename InputIterator2, typena
     thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
     thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
 
+    // XXX consider streaming partitions which are larger than block_size * work_per_thread
+    //     to do this, each block break its partition into subpartitions of size <= threads_per_block * work_per_thread
+    //     to find the end of each subpartition, it would do a balanced_path search
+    // XXX is there a way to avoid this search? each block proceeds sequentially
+
     // XXX gmem -> smem here
 
     blockwise_set_intersection(threads_per_block,
