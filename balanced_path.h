@@ -170,54 +170,6 @@ __host__ __device__ int2 BalancedPath(InputIt1 a, int aCount, InputIt2 b,
 }
 
 
-template<typename IntT, typename InputIt1, typename InputIt2, typename Comp>
-__host__ __device__
-int2 BalancedPath_jph(InputIt1 a, int aCount,
-                      InputIt2 b, int bCount,
-                      int diag,
-                      IntT levels,
-                      Comp comp)
-{
-  typedef typename thrust::iterator_traits<InputIt1>::value_type T;
-
-  int aIndex = MergePath<false>(a, aCount, b, bCount, diag, comp);
-  int bIndex = diag - aIndex;
-  
-  bool star = false;
-  if(bIndex < bCount)
-  {
-    T x = b[bIndex];
-    
-    // Search for the beginning of the duplicate run in both A and B.
-    int aStart = BiasedBinarySearch<false, IntT>(a, aIndex, x, levels, comp);
-    int bStart = BiasedBinarySearch<false, IntT>(b, bIndex, x, levels, comp);
-    
-    // The distance between x's merge path and its lower_bound is its rank.
-    // We add up the a and b ranks and evenly distribute them to
-    // get a stairstep path.
-    int aRun = aIndex - aStart;
-    int bRun = bIndex - bStart;
-    int xCount = aRun + bRun;
-    
-    // Attempt to advance b and regress a.
-    int bAdvance = thrust::max(xCount>> 1, xCount - aRun);
-    int bEnd     = thrust::min(bCount, bStart + bAdvance + 1);
-    int bRunEnd = BinarySearch<true>(b + bIndex, bEnd - bIndex, x, comp) + bIndex;
-    bRun = bRunEnd - bStart;
-    
-    bAdvance = thrust::min(bAdvance, bRun);
-    int aAdvance = xCount - bAdvance;
-    
-    bool roundUp = (aAdvance == bAdvance + 1) && (bAdvance < bRun);
-    aIndex = aStart + aAdvance;
-    
-    if(roundUp) star = true;
-  }
-
-  return make_int2(aIndex, star);
-}
-
-
 } // namespace detail
 
 
