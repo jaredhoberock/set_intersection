@@ -221,28 +221,28 @@ int2 BalancedPath_jph(InputIt1 a, int aCount,
 } // namespace detail
 
 
-template<typename IntT, typename InputIt1, typename InputIt2, typename Comp>
+template<typename RandomAccessIterator1, typename Size1, typename RandomAccessIterator2, typename Size2, typename Compare>
 __host__ __device__
 thrust::pair<int,int>
-  balanced_path(InputIt1 a, int aCount,
-                InputIt2 b, int bCount,
-                int diag,
-                IntT levels,
-                Comp comp)
+  balanced_path(RandomAccessIterator1 first1, Size1 n1,
+                RandomAccessIterator2 first2, Size1 n2,
+                Size1 diag,
+                Size2 levels,
+                Compare comp)
 {
-  typedef typename thrust::iterator_traits<InputIt1>::value_type T;
+  typedef typename thrust::iterator_traits<RandomAccessIterator1>::value_type T;
 
-  int aIndex = detail::MergePath<false>(a, aCount, b, bCount, diag, comp);
+  int aIndex = detail::MergePath<false>(first1, n1, first2, n2, diag, comp);
   int bIndex = diag - aIndex;
   
   bool star = false;
-  if(bIndex < bCount)
+  if(bIndex < n2)
   {
-    T x = b[bIndex];
+    T x = first2[bIndex];
     
     // Search for the beginning of the duplicate run in both A and B.
-    int aStart = detail::BiasedBinarySearch<false, IntT>(a, aIndex, x, levels, comp);
-    int bStart = detail::BiasedBinarySearch<false, IntT>(b, bIndex, x, levels, comp);
+    int aStart = detail::BiasedBinarySearch<false>(first1, aIndex, x, levels, comp);
+    int bStart = detail::BiasedBinarySearch<false>(first2, bIndex, x, levels, comp);
     
     // The distance between x's merge path and its lower_bound is its rank.
     // We add up the a and b ranks and evenly distribute them to
@@ -253,8 +253,8 @@ thrust::pair<int,int>
     
     // Attempt to advance b and regress a.
     int bAdvance = thrust::max(xCount>> 1, xCount - aRun);
-    int bEnd     = thrust::min(bCount, bStart + bAdvance + 1);
-    int bRunEnd = detail::BinarySearch<true>(b + bIndex, bEnd - bIndex, x, comp) + bIndex;
+    int bEnd     = thrust::min(n2, bStart + bAdvance + 1);
+    int bRunEnd = detail::BinarySearch<true>(first2 + bIndex, bEnd - bIndex, x, comp) + bIndex;
     bRun = bRunEnd - bStart;
     
     bAdvance = thrust::min(bAdvance, bRun);
