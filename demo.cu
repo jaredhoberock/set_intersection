@@ -145,6 +145,8 @@ template<typename Size, typename InputIterator1, typename InputIterator2, typena
   {
     Size diag = min(n1 + n2, i * partition_size);
 
+    // XXX the correctness of balanced_path depends critically on the ll suffix below
+    //     why???
     return balanced_path(first1, n1, first2, n2, diag, 4ll, comp);
   }
 };
