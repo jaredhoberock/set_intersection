@@ -151,23 +151,39 @@ template<typename Size, typename InputIterator1, typename InputIterator2, typena
 
 
 // XXX optimize me!
-template<typename Iterator>
+template<typename Iterator, typename T, typename BinaryFunction>
 inline __device__
-  void blockwise_inplace_exclusive_scan(Iterator first, Iterator last)
+  typename thrust::iterator_value<Iterator>::type
+    blockwise_inplace_exclusive_scan(Iterator first, T init, BinaryFunction binary_op)
 {
+  __shared__ typename thrust::iterator_value<Iterator>::type s_carry;
+
   if(threadIdx.x == 0)
   {
-    typename thrust::iterator_value<Iterator>::type sum = 0;
+    typename thrust::iterator_value<Iterator>::type sum = init;
 
-    for(; first != last; ++first)
+    for(unsigned int i = 0; i < blockDim.x; ++i)
     {
-      typename thrust::iterator_value<Iterator>::type temp = *first;
-      *first = sum;
-      sum += temp;
+      typename thrust::iterator_value<Iterator>::type temp = first[i];
+      first[i] = sum;
+      sum = binary_op(sum, temp);
     }
+
+    s_carry = sum;
   }
 
   __syncthreads();
+
+  return s_carry;
+}
+
+
+template<typename Iterator, typename T>
+inline __device__
+  typename thrust::iterator_value<Iterator>::type
+    blockwise_inplace_exclusive_scan(Iterator first, T init)
+{
+  return blockwise_inplace_exclusive_scan(first, init, thrust::plus<typename thrust::iterator_value<Iterator>::type>());
 }
 
 
@@ -261,7 +277,7 @@ inline __device__
 
   typedef typename thrust::iterator_value<InputIterator1>::type value_type;
 
-  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<unsigned int, block_size + 1> s_thread_output_size;
+  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<unsigned int, block_size> s_thread_output_size;
 
   thrust::pair<int,int> thread_input_begin = s_input_partition_offsets[thread_idx];
   thrust::pair<int,int> thread_input_end   = s_input_partition_offsets[thread_idx + 1];
@@ -279,14 +295,13 @@ inline __device__
   __syncthreads();
 
   // scan to turn per-thread counts into output indices
-  // XXX the size of this scan is block_size + 1
-  blockwise_inplace_exclusive_scan(s_thread_output_size.begin(), s_thread_output_size.end());
+  unsigned int block_output_size = blockwise_inplace_exclusive_scan(s_thread_output_size.begin(), 0u);
 
   serial_bounded_copy_if(work_per_thread, sparse_results, active_mask, result + s_thread_output_size[thread_idx]);
 
   __syncthreads();
 
-  return result + s_thread_output_size[block_size];
+  return result + block_output_size;
 }
 
 
