@@ -150,32 +150,65 @@ template<typename Size, typename InputIterator1, typename InputIterator2, typena
 }
 
 
-// XXX optimize me!
-template<typename Iterator, typename T, typename BinaryFunction>
+template<typename RandomAccessIterator1, typename Size, typename RandomAccessIterator2>
 inline __device__
-  typename thrust::iterator_value<Iterator>::type
-    blockwise_inplace_exclusive_scan(Iterator first, T init, BinaryFunction binary_op)
+void blockwise_copy_n(RandomAccessIterator1 first, Size n, RandomAccessIterator2 result)
 {
-  __shared__ typename thrust::iterator_value<Iterator>::type s_carry;
-
-  if(threadIdx.x == 0)
+  for(unsigned int i = threadIdx.x; i < n; i += blockDim.x)
   {
-    typename thrust::iterator_value<Iterator>::type sum = init;
-
-    for(unsigned int i = 0; i < blockDim.x; ++i)
-    {
-      typename thrust::iterator_value<Iterator>::type temp = first[i];
-      first[i] = sum;
-      sum = binary_op(sum, temp);
-    }
-
-    s_carry = sum;
+    result[i] = first[i];
   }
 
   __syncthreads();
-
-  return s_carry;
 }
+
+
+template<typename RandomAccessIterator, typename BinaryFunction>
+inline __device__
+void blockwise_inplace_inclusive_scan(RandomAccessIterator first, BinaryFunction op)
+{
+  typename thrust::iterator_value<RandomAccessIterator>::type x = first[threadIdx.x];
+
+  for(unsigned int offset = 1; offset < blockDim.x; offset *= 2)
+  {
+    if(threadIdx.x >= offset)
+    {
+      x = op(first[threadIdx.x - offset], x);
+    }
+
+    __syncthreads();
+
+    first[threadIdx.x] = x;
+
+    __syncthreads();
+  }
+}
+
+
+// XXX improve this
+template<typename RandomAccessIterator, typename T, typename BinaryFunction>
+inline __device__
+typename thrust::iterator_value<RandomAccessIterator>::type
+  blockwise_inplace_exclusive_scan(RandomAccessIterator first, T init, BinaryFunction op)
+{
+  // perform an inclusive scan, then shift right
+  blockwise_inplace_inclusive_scan(first, op);
+
+  typename thrust::iterator_value<RandomAccessIterator>::type carry = first[blockDim.x - 1];
+
+  __syncthreads();
+
+  typename thrust::iterator_value<RandomAccessIterator>::type left = (threadIdx.x == 0) ? init : first[threadIdx.x - 1];
+
+  __syncthreads();
+
+  first[threadIdx.x] = left;
+
+  __syncthreads();
+
+  return carry;
+}
+
 
 
 template<typename Iterator, typename T>
@@ -318,11 +351,19 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
   thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
   thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
 
-  // XXX gmem -> smem here
+  // load the input into __shared__ storage
+  typedef typename thrust::iterator_value<InputIterator2>::type value_type;
+  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
+
+  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                             block_input_end.second - block_input_begin.second);
+
+  blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
+  blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input.begin() + block_input_size.first);
 
   unsigned int count =
-    blockwise_count_set_intersection<threads_per_block,work_per_thread>(first1 + block_input_begin.first,  first1 + block_input_end.first,
-                                                                        first2 + block_input_begin.second, first2 + block_input_end.second,
+    blockwise_count_set_intersection<threads_per_block,work_per_thread>(s_input.begin(), s_input.begin() + block_input_size.first,
+                                                                        s_input.begin() + block_input_size.first, s_input.begin() + block_input_size.first + block_input_size.second,
                                                                         comp);
 
   if(threadIdx.x == 0)
