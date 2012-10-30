@@ -393,14 +393,20 @@ __global__
   //     to find the end of each subpartition, it would do a balanced_path search
   // XXX is there a way to avoid this search? each block proceeds sequentially
 
-  // XXX gmem -> smem here
-  
-  blockwise_set_intersection<threads_per_block,work_per_thread>(first1 + block_input_begin.first,  first1 + block_input_end.first,
-                                                                first2 + block_input_begin.second, first2 + block_input_end.second,
+  // load the input into __shared__ storage
+  typedef typename thrust::iterator_value<InputIterator2>::type value_type;
+  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
+
+  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                             block_input_end.second - block_input_begin.second);
+
+  blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
+  blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input.begin() + block_input_size.first);
+
+  blockwise_set_intersection<threads_per_block,work_per_thread>(s_input.begin(),  s_input.begin() + block_input_size.first,
+                                                                s_input.begin() + block_input_size.first, s_input.begin() + block_input_size.first + block_input_size.second,
                                                                 result + output_partition_offsets[block_idx],
                                                                 comp);
-
-  // XXX smem -> gmem here
 }
 
 
