@@ -152,7 +152,7 @@ template<typename Size, typename InputIterator1, typename InputIterator2, typena
 
 template<typename RandomAccessIterator1, typename Size, typename RandomAccessIterator2>
 inline __device__
-void blockwise_copy_n(RandomAccessIterator1 first, Size n, RandomAccessIterator2 result)
+RandomAccessIterator2 blockwise_copy_n(RandomAccessIterator1 first, Size n, RandomAccessIterator2 result)
 {
   for(unsigned int i = threadIdx.x; i < n; i += blockDim.x)
   {
@@ -160,6 +160,8 @@ void blockwise_copy_n(RandomAccessIterator1 first, Size n, RandomAccessIterator2
   }
 
   __syncthreads();
+
+  return result + n;
 }
 
 
@@ -358,12 +360,12 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
   thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
                                                              block_input_end.second - block_input_begin.second);
 
-  blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
-  blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input.begin() + block_input_size.first);
+  value_type *s_input_end1 = blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
+  value_type *s_input_end2 = blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input_end1);
 
   unsigned int count =
-    blockwise_count_set_intersection<threads_per_block,work_per_thread>(s_input.begin(), s_input.begin() + block_input_size.first,
-                                                                        s_input.begin() + block_input_size.first, s_input.begin() + block_input_size.first + block_input_size.second,
+    blockwise_count_set_intersection<threads_per_block,work_per_thread>(s_input.begin(), s_input_end1,
+                                                                        s_input_end1, s_input_end2,
                                                                         comp);
 
   if(threadIdx.x == 0)
@@ -400,11 +402,11 @@ __global__
   thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
                                                              block_input_end.second - block_input_begin.second);
 
-  blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
-  blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input.begin() + block_input_size.first);
+  value_type *s_input_end1 = blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
+  value_type *s_input_end2 = blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input_end1);
 
-  blockwise_set_intersection<threads_per_block,work_per_thread>(s_input.begin(),  s_input.begin() + block_input_size.first,
-                                                                s_input.begin() + block_input_size.first, s_input.begin() + block_input_size.first + block_input_size.second,
+  blockwise_set_intersection<threads_per_block,work_per_thread>(s_input.begin(), s_input_end1,
+                                                                s_input_end1,    s_input_end2,
                                                                 result + output_partition_offsets[block_idx],
                                                                 comp);
 }
