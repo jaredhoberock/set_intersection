@@ -7,6 +7,7 @@
 #include <thrust/system/cuda/detail/detail/uninitialized.h>
 #include <thrust/system/cuda/error.h>
 #include <thrust/detail/util/blocking.h>
+#include <thrust/detail/temporary_array.h>
 #include <vector>
 
 namespace set_intersection_detail
@@ -356,6 +357,9 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
                                      OutputIterator result,
                                      Compare comp)
 {
+  typedef thrust::cuda::tag System;
+  System system;
+
   const int n1 = last1 - first1;
   const int n2 = last2 - first2;
 
@@ -366,12 +370,12 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
 
   // find input partition offsets
   // +1 to handle the end of the input elegantly
-  thrust::device_vector<thrust::pair<int,int> > input_partition_offsets(num_partitions + 1);
+  thrust::detail::temporary_array<thrust::pair<int,int>, System> input_partition_offsets(0, system, num_partitions + 1);
   set_intersection_detail::find_partition_offsets<int>(input_partition_offsets.size(), work_per_block, first1, last1, first2, last2, input_partition_offsets.begin(), comp);
 
   // find output partition offsets
   // +1 to store the total size of the total
-  thrust::device_vector<int> output_partition_offsets(num_partitions + 1);
+  thrust::detail::temporary_array<int, System> output_partition_offsets(0, system, num_partitions + 1);
   set_intersection_detail::my_count_set_intersection_kernel<threads_per_block,work_per_thread><<<num_partitions,threads_per_block>>>(input_partition_offsets.begin(), first1, first2, output_partition_offsets.begin(), comp);
   cudaError_t error = cudaGetLastError();
   if(error)
@@ -390,6 +394,6 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
     throw thrust::system_error(error, thrust::cuda_category(), std::string("CUDA error after my_set_intersection_kernel"));
   }
 
-  return result + output_partition_offsets.back();
+  return result + output_partition_offsets[num_partitions];
 }
 
