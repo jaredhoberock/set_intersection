@@ -364,16 +364,15 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   const int work_per_block = threads_per_block * work_per_thread;
   const int num_partitions = thrust::detail::util::divide_ri(n1 + n2, work_per_block);
 
-  thrust::device_vector<typename thrust::iterator_value<InputIterator1>::type> d_a(first1,last1);
-  thrust::device_vector<typename thrust::iterator_value<InputIterator2>::type> d_b(first2,last2);
-
   // find input partition offsets
-  thrust::device_vector<thrust::pair<int,int> > d_input_partition_offsets(num_partitions + 1);
-  set_intersection_detail::find_partition_offsets<int>(d_input_partition_offsets.size(), work_per_block, d_a.begin(), d_a.end(), d_b.begin(), d_b.end(), d_input_partition_offsets.begin(), comp);
+  // +1 to handle the end of the input elegantly
+  thrust::device_vector<thrust::pair<int,int> > input_partition_offsets(num_partitions + 1);
+  set_intersection_detail::find_partition_offsets<int>(input_partition_offsets.size(), work_per_block, first1, last1, first2, last2, input_partition_offsets.begin(), comp);
 
   // find output partition offsets
-  thrust::device_vector<int> d_output_partition_offsets(num_partitions + 1);
-  set_intersection_detail::my_count_set_intersection_kernel<threads_per_block,work_per_thread><<<num_partitions,threads_per_block>>>(d_input_partition_offsets.begin(), d_a.begin(), d_b.begin(), d_output_partition_offsets.begin(), comp);
+  // +1 to store the total size of the total
+  thrust::device_vector<int> output_partition_offsets(num_partitions + 1);
+  set_intersection_detail::my_count_set_intersection_kernel<threads_per_block,work_per_thread><<<num_partitions,threads_per_block>>>(input_partition_offsets.begin(), first1, first2, output_partition_offsets.begin(), comp);
   cudaError_t error = cudaGetLastError();
   if(error)
   {
@@ -381,19 +380,16 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   }
 
   // turn the counts into offsets
-  thrust::exclusive_scan(d_output_partition_offsets.begin(), d_output_partition_offsets.end(), d_output_partition_offsets.begin(), 0);
+  thrust::exclusive_scan(output_partition_offsets.begin(), output_partition_offsets.end(), output_partition_offsets.begin(), 0);
 
   // run the set op kernel
-  thrust::device_vector<typename thrust::iterator_value<InputIterator1>::type> d_result(n1 + n2);
-  set_intersection_detail::my_set_intersection_kernel<threads_per_block,work_per_thread><<<num_partitions,threads_per_block>>>(d_input_partition_offsets.begin(), d_a.begin(), d_b.begin(), d_output_partition_offsets.begin(), d_result.begin(), comp);
+  set_intersection_detail::my_set_intersection_kernel<threads_per_block,work_per_thread><<<num_partitions,threads_per_block>>>(input_partition_offsets.begin(), first1, first2, output_partition_offsets.begin(), result, comp);
   error = cudaThreadSynchronize();
   if(error)
   {
     throw thrust::system_error(error, thrust::cuda_category(), std::string("CUDA error after my_set_intersection_kernel"));
   }
 
-  thrust::copy(d_result.begin(), d_result.begin() + d_output_partition_offsets.back(), result);
-
-  return result + d_output_partition_offsets.back();
+  return result + output_partition_offsets.back();
 }
 
