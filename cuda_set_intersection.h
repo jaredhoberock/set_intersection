@@ -430,12 +430,15 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   const int threads_per_block = 128;
   const int work_per_thread = 15;
   const int work_per_block = threads_per_block * work_per_thread;
-  const int num_partitions = thrust::detail::util::divide_ri(n1 + n2, work_per_block);
+
+  // -1 because balanced_path adds a single element to the end of a starred partition, increasing its size by one
+  const int maximum_partition_size = work_per_block - 1;
+  const int num_partitions = thrust::detail::util::divide_ri(n1 + n2, maximum_partition_size);
 
   // find input partition offsets
   // +1 to handle the end of the input elegantly
   thrust::detail::temporary_array<thrust::pair<int,int>, System> input_partition_offsets(0, system, num_partitions + 1);
-  set_intersection_detail::find_partition_offsets<int>(input_partition_offsets.size(), work_per_block, first1, last1, first2, last2, input_partition_offsets.begin(), comp);
+  set_intersection_detail::find_partition_offsets<int>(input_partition_offsets.size(), maximum_partition_size, first1, last1, first2, last2, input_partition_offsets.begin(), comp);
 
   // find output partition offsets
   // +1 to store the total size of the total
