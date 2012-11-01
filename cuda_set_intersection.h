@@ -9,9 +9,12 @@
 #include <thrust/detail/util/blocking.h>
 #include <thrust/detail/temporary_array.h>
 #include <vector>
+#include <cassert>
 
 namespace set_intersection_detail
 {
+
+using thrust::system::cuda::detail::detail::uninitialized_array;
 
 
 template<typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare>
@@ -250,7 +253,7 @@ inline __device__
   int n1 = last1 - first1;
   int n2 = last2 - first2;
 
-  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
+  __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
 
   if(thread_idx == 0)
   {
@@ -271,8 +274,9 @@ inline __device__
   thrust::pair<int,int> thread_input_begin = s_input_partition_offsets[thread_idx];
   thrust::pair<int,int> thread_input_end   = s_input_partition_offsets[thread_idx + 1];
 
+  // work_per_thread + 1 to accomodate a "starred" partition returned from balanced_path above
   s_thread_output_size[thread_idx] =
-    serial_bounded_count_set_intersection(work_per_thread,
+    serial_bounded_count_set_intersection(work_per_thread + 1,
                                           first1 + thread_input_begin.first,  first1 + thread_input_end.first,
                                           first2 + thread_input_begin.second, first2 + thread_input_end.second,
                                           comp);
@@ -295,7 +299,7 @@ inline __device__
   int n1 = last1 - first1;
   int n2 = last2 - first2;
 
-  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
+  __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
 
   if(thread_idx == 0)
   {
@@ -310,29 +314,28 @@ inline __device__
 
   __syncthreads();
 
-  typedef typename thrust::iterator_value<InputIterator1>::type value_type;
-
-  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<unsigned int, block_size> s_thread_output_size;
-
   thrust::pair<int,int> thread_input_begin = s_input_partition_offsets[thread_idx];
   thrust::pair<int,int> thread_input_end   = s_input_partition_offsets[thread_idx + 1];
 
-  value_type   sparse_results[work_per_thread];
+  typedef typename thrust::iterator_value<InputIterator1>::type value_type;
+  // +1 to accomodate a "starred" partition returned from balanced_path above
+  uninitialized_array<value_type, work_per_thread + 1> sparse_result;
   unsigned int active_mask =
-    serial_bounded_sparse_set_intersection(work_per_thread,
+    serial_bounded_sparse_set_intersection(work_per_thread + 1,
                                            first1 + thread_input_begin.first,  first1 + thread_input_end.first,
                                            first2 + thread_input_begin.second, first2 + thread_input_end.second,
-                                           sparse_results,
+                                           sparse_result.begin(),
                                            comp);
 
+  __shared__ unsigned int s_thread_output_size[block_size];
   s_thread_output_size[thread_idx] = __popc(active_mask);
 
   __syncthreads();
 
   // scan to turn per-thread counts into output indices
-  unsigned int block_output_size = blockwise_inplace_exclusive_scan(s_thread_output_size.begin(), 0u);
+  unsigned int block_output_size = blockwise_inplace_exclusive_scan(s_thread_output_size, 0u);
 
-  serial_bounded_copy_if(work_per_thread, sparse_results, active_mask, result + s_thread_output_size[thread_idx]);
+  serial_bounded_copy_if(work_per_thread + 1, sparse_result.begin(), active_mask, result + s_thread_output_size[thread_idx]);
 
   __syncthreads();
 
@@ -355,7 +358,7 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
 
   // load the input into __shared__ storage
   typedef typename thrust::iterator_value<InputIterator2>::type value_type;
-  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
+  __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
 
   thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
                                                              block_input_end.second - block_input_begin.second);
@@ -397,7 +400,7 @@ __global__
 
   // load the input into __shared__ storage
   typedef typename thrust::iterator_value<InputIterator2>::type value_type;
-  __shared__ thrust::system::cuda::detail::detail::uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
+  __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
 
   thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
                                                              block_input_end.second - block_input_begin.second);
@@ -431,7 +434,7 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   const int work_per_thread = 15;
   const int work_per_block = threads_per_block * work_per_thread;
 
-  // -1 because balanced_path adds a single element to the end of a starred partition, increasing its size by one
+  // -1 because balanced_path adds a single element to the end of a "starred" partition, increasing its size by one
   const int maximum_partition_size = work_per_block - 1;
   const int num_partitions = thrust::detail::util::divide_ri(n1 + n2, maximum_partition_size);
 
