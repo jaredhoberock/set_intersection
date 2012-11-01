@@ -396,14 +396,10 @@ __global__
   thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
                                                              block_input_end.second - block_input_begin.second);
 
-  // advance first1 & first2
+  // advance iterators
   first1 += block_input_begin.first;
   first2 += block_input_begin.second;
-
-  // XXX consider streaming partitions which are larger than block_size * work_per_thread
-  //     to do this, each block break its partition into subpartitions of size <= threads_per_block * work_per_thread
-  //     to find the end of each subpartition, it would do a balanced_path search
-  // XXX is there a way to avoid this search? each block proceeds sequentially
+  result += output_partition_offsets[block_idx];
 
   // load the input into __shared__ storage
   typedef typename thrust::iterator_value<InputIterator2>::type value_type;
@@ -414,7 +410,7 @@ __global__
 
   blockwise_bounded_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), block_input_size.first,
                                                                           s_input_end1,    block_input_size.second,
-                                                                          result + output_partition_offsets[block_idx],
+                                                                          result,
                                                                           comp);
 }
 
