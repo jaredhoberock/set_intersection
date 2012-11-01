@@ -190,6 +190,14 @@ void blockwise_inplace_inclusive_scan(RandomAccessIterator first, BinaryFunction
 }
 
 
+template<typename RandomAccessIterator>
+inline __device__
+void blockwise_inplace_inclusive_scan(RandomAccessIterator first)
+{
+  blockwise_inplace_inclusive_scan(first, thrust::plus<typename thrust::iterator_value<RandomAccessIterator>::type>());
+}
+
+
 // XXX improve this
 template<typename RandomAccessIterator, typename T, typename BinaryFunction>
 inline __device__
@@ -225,24 +233,6 @@ inline __device__
 }
 
 
-// XXX optimize me!
-template<typename Iterator>
-inline __device__
-  typename thrust::iterator_value<Iterator>::type
-    blockwise_reduce(Iterator first, Iterator last)
-{
-  typename thrust::iterator_value<Iterator>::type result = 0;
-  for(; first != last; ++first)
-  {
-    result += *first;
-  }
-
-  __syncthreads();
-
-  return result;
-}
-
-
 template<int block_size, int work_per_thread, typename InputIterator1, typename InputIterator2, typename Compare>
 inline __device__
   unsigned int blockwise_bounded_count_set_intersection_n(InputIterator1 first1, int n1,
@@ -253,16 +243,14 @@ inline __device__
 
   __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
 
+  // find partition offsets
+  int diag = min(n1 + n2, thread_idx * work_per_thread);
+  s_input_partition_offsets[thread_idx] = balanced_path(first1, n1, first2, n2, diag, 2, comp);
+
   if(thread_idx == 0)
   {
     s_input_partition_offsets[block_size] = thrust::make_pair(n1,n2);
   }
-
-  __syncthreads();
-
-  // find partition offsets
-  int diag = min(n1 + n2, thread_idx * work_per_thread);
-  s_input_partition_offsets[thread_idx] = balanced_path(first1, n1, first2, n2, diag, 2, comp);
 
   __syncthreads();
 
@@ -282,7 +270,8 @@ inline __device__
   __syncthreads();
 
   // reduce per-thread counts
-  return blockwise_reduce(&s_thread_output_size[0], &s_thread_output_size[block_size]);
+  blockwise_inplace_inclusive_scan(s_thread_output_size);
+  return s_thread_output_size[blockDim.x - 1];
 }
 
 
@@ -297,16 +286,14 @@ inline __device__
 
   __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
 
+  // find partition offsets
+  int diag = thrust::min(n1 + n2, thread_idx * work_per_thread);
+  s_input_partition_offsets[thread_idx] = balanced_path(first1, n1, first2, n2, diag, 2, comp);
+
   if(thread_idx == 0)
   {
     s_input_partition_offsets.back() = thrust::make_pair(n1,n2);
   }
-
-  __syncthreads();
-
-  // find partition offsets
-  int diag = thrust::min(n1 + n2, thread_idx * work_per_thread);
-  s_input_partition_offsets[thread_idx] = balanced_path(first1, n1, first2, n2, diag, 2, comp);
 
   __syncthreads();
 
@@ -352,24 +339,42 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
   thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
   thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
 
-  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
-                                                             block_input_end.second - block_input_begin.second);
+  thrust::pair<int,int> remaining_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                                 block_input_end.second - block_input_begin.second);
 
   // advance first1 & first2
   first1 += block_input_begin.first;
   first2 += block_input_begin.second;
 
-  // load the input into __shared__ storage
-  typedef typename thrust::iterator_value<InputIterator2>::type value_type;
-  __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
+  // iterate until the input is consumed
+  unsigned int count = 0;
+  while(remaining_input_size.first + remaining_input_size.second > 0)
+  {
+    // find the end of this subpartition's input
+    // -1 to accomodate "starred" partitions
+    int max_subpartition_size = threads_per_block * work_per_thread - 1;
+    int diag = min(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
+    thrust::pair<int,int> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
+  
+    // load the input into __shared__ storage
+    typedef typename thrust::iterator_value<InputIterator2>::type value_type;
+    __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
+  
+    value_type *s_input_end1 = blockwise_copy_n(first1, subpartition_size.first,  s_input.begin());
+    value_type *s_input_end2 = blockwise_copy_n(first2, subpartition_size.second, s_input_end1);
+  
+    count += blockwise_bounded_count_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), subpartition_size.first,
+                                                                                           s_input_end1,    subpartition_size.second,
+                                                                                           comp);
 
-  value_type *s_input_end1 = blockwise_copy_n(first1,  block_input_size.first,  s_input.begin());
-  value_type *s_input_end2 = blockwise_copy_n(first2, block_input_size.second, s_input_end1);
+    // advance input
+    first1 += subpartition_size.first;
+    first2 += subpartition_size.second;
 
-  unsigned int count =
-    blockwise_bounded_count_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), block_input_size.first,
-                                                                                  s_input_end1,    block_input_size.second,
-                                                                                  comp);
+    // decrement remaining size
+    remaining_input_size.first  -= subpartition_size.first;
+    remaining_input_size.second -= subpartition_size.second;
+  }
 
   if(threadIdx.x == 0)
   {
@@ -393,25 +398,43 @@ __global__
   thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
   thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
 
-  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
-                                                             block_input_end.second - block_input_begin.second);
+  thrust::pair<int,int> remaining_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                                 block_input_end.second - block_input_begin.second);
 
   // advance iterators
   first1 += block_input_begin.first;
   first2 += block_input_begin.second;
   result += output_partition_offsets[block_idx];
 
-  // load the input into __shared__ storage
-  typedef typename thrust::iterator_value<InputIterator2>::type value_type;
-  __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
+  // iterate until the input is consumed
+  while(remaining_input_size.first + remaining_input_size.second > 0)
+  {
+    // find the end of this subpartition's input
+    // -1 to accomodate "starred" partitions
+    int max_subpartition_size = threads_per_block * work_per_thread - 1;
+    int diag = min(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
+    thrust::pair<int,int> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
+    
+    // load the input into __shared__ storage
+    typedef typename thrust::iterator_value<InputIterator2>::type value_type;
+    __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
 
-  value_type *s_input_end1 = blockwise_copy_n(first1, block_input_size.first,  s_input.begin());
-  value_type *s_input_end2 = blockwise_copy_n(first2, block_input_size.second, s_input_end1);
+    value_type *s_input_end1 = blockwise_copy_n(first1, subpartition_size.first,  s_input.begin());
+    value_type *s_input_end2 = blockwise_copy_n(first2, subpartition_size.second, s_input_end1);
 
-  blockwise_bounded_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), block_input_size.first,
-                                                                          s_input_end1,    block_input_size.second,
-                                                                          result,
-                                                                          comp);
+    result = blockwise_bounded_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), subpartition_size.first,
+                                                                                     s_input_end1,    subpartition_size.second,
+                                                                                     result,
+                                                                                     comp);
+
+    // advance input
+    first1 += subpartition_size.first;
+    first2 += subpartition_size.second;
+
+    // decrement remaining size
+    remaining_input_size.first  -= subpartition_size.first;
+    remaining_input_size.second -= subpartition_size.second;
+  }
 }
 
 
@@ -426,16 +449,20 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
 {
   typedef thrust::cuda::tag System;
   System system;
+  using thrust::system::cuda::detail::device_properties;
 
   const int n1 = last1 - first1;
   const int n2 = last2 - first2;
 
-  const int threads_per_block = 128;
-  const int work_per_thread = 15;
+  const int work_per_thread         = 15;
+  const int threads_per_block       = 128;
   const int work_per_block = threads_per_block * work_per_thread;
 
   // -1 because balanced_path adds a single element to the end of a "starred" partition, increasing its size by one
   const int maximum_partition_size = work_per_block - 1;
+  //const int max_num_blocks = device_properties().maxGridSize[0];
+  //const int num_partitions = min(max_num_blocks, thrust::detail::util::divide_ri(n1 + n2, maximum_partition_size));
+  const int max_num_blocks = device_properties().maxGridSize[0];
   const int num_partitions = thrust::detail::util::divide_ri(n1 + n2, maximum_partition_size);
 
   // find input partition offsets
