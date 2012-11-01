@@ -352,15 +352,19 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
   thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
   thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
 
+  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                             block_input_end.second - block_input_begin.second);
+
+  // advance first1 & first2
+  first1 += block_input_begin.first;
+  first2 += block_input_begin.second;
+
   // load the input into __shared__ storage
   typedef typename thrust::iterator_value<InputIterator2>::type value_type;
   __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
 
-  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
-                                                             block_input_end.second - block_input_begin.second);
-
-  value_type *s_input_end1 = blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
-  value_type *s_input_end2 = blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input_end1);
+  value_type *s_input_end1 = blockwise_copy_n(first1,  block_input_size.first,  s_input.begin());
+  value_type *s_input_end2 = blockwise_copy_n(first2, block_input_size.second, s_input_end1);
 
   unsigned int count =
     blockwise_bounded_count_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), block_input_size.first,
@@ -389,6 +393,13 @@ __global__
   thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
   thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
 
+  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                             block_input_end.second - block_input_begin.second);
+
+  // advance first1 & first2
+  first1 += block_input_begin.first;
+  first2 += block_input_begin.second;
+
   // XXX consider streaming partitions which are larger than block_size * work_per_thread
   //     to do this, each block break its partition into subpartitions of size <= threads_per_block * work_per_thread
   //     to find the end of each subpartition, it would do a balanced_path search
@@ -398,11 +409,8 @@ __global__
   typedef typename thrust::iterator_value<InputIterator2>::type value_type;
   __shared__ uninitialized_array<value_type, threads_per_block * work_per_thread> s_input;
 
-  thrust::pair<int,int> block_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
-                                                             block_input_end.second - block_input_begin.second);
-
-  value_type *s_input_end1 = blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
-  value_type *s_input_end2 = blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input_end1);
+  value_type *s_input_end1 = blockwise_copy_n(first1, block_input_size.first,  s_input.begin());
+  value_type *s_input_end2 = blockwise_copy_n(first2, block_input_size.second, s_input_end1);
 
   blockwise_bounded_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), block_input_size.first,
                                                                           s_input_end1,    block_input_size.second,
