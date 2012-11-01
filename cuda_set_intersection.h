@@ -245,13 +245,11 @@ inline __device__
 
 template<int block_size, int work_per_thread, typename InputIterator1, typename InputIterator2, typename Compare>
 inline __device__
-  unsigned int blockwise_count_set_intersection(InputIterator1 first1, InputIterator1 last1,
-                                                InputIterator2 first2, InputIterator2 last2,
-                                                Compare comp)
+  unsigned int blockwise_bounded_count_set_intersection_n(InputIterator1 first1, int n1,
+                                                          InputIterator2 first2, int n2,
+                                                          Compare comp)
 {
   int thread_idx = threadIdx.x;
-  int n1 = last1 - first1;
-  int n2 = last2 - first2;
 
   __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
 
@@ -290,14 +288,12 @@ inline __device__
 
 template<int block_size, int work_per_thread, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare>
 inline __device__
-  OutputIterator blockwise_set_intersection(InputIterator1 first1, InputIterator1 last1,
-                                            InputIterator2 first2, InputIterator2 last2,
-                                            OutputIterator result,
-                                            Compare comp)
+  OutputIterator blockwise_bounded_set_intersection_n(InputIterator1 first1, int n1,
+                                                      InputIterator2 first2, int n2,
+                                                      OutputIterator result,
+                                                      Compare comp)
 {
   int thread_idx = threadIdx.x;
-  int n1 = last1 - first1;
-  int n2 = last2 - first2;
 
   __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
 
@@ -367,9 +363,9 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
   value_type *s_input_end2 = blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input_end1);
 
   unsigned int count =
-    blockwise_count_set_intersection<threads_per_block,work_per_thread>(s_input.begin(), s_input_end1,
-                                                                        s_input_end1, s_input_end2,
-                                                                        comp);
+    blockwise_bounded_count_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), block_input_size.first,
+                                                                                  s_input_end1,    block_input_size.second,
+                                                                                  comp);
 
   if(threadIdx.x == 0)
   {
@@ -408,10 +404,10 @@ __global__
   value_type *s_input_end1 = blockwise_copy_n(first1 + block_input_begin.first,  block_input_size.first,  s_input.begin());
   value_type *s_input_end2 = blockwise_copy_n(first2 + block_input_begin.second, block_input_size.second, s_input_end1);
 
-  blockwise_set_intersection<threads_per_block,work_per_thread>(s_input.begin(), s_input_end1,
-                                                                s_input_end1,    s_input_end2,
-                                                                result + output_partition_offsets[block_idx],
-                                                                comp);
+  blockwise_bounded_set_intersection_n<threads_per_block,work_per_thread>(s_input.begin(), block_input_size.first,
+                                                                          s_input_end1,    block_input_size.second,
+                                                                          result + output_partition_offsets[block_idx],
+                                                                          comp);
 }
 
 
