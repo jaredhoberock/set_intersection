@@ -449,12 +449,12 @@ OutputIterator blockwise_set_intersection(InputIterator1 first1, InputIterator2 
 
 
 template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename OutputIterator, typename Compare>
-  __global__ void my_count_set_intersection_kernel(InputIterator1 input_partition_offsets,
-                                                   Size           num_partitions,
-                                                   InputIterator2 first1,
-                                                   InputIterator3 first2,
-                                                   OutputIterator result,
-                                                   Compare comp)
+  __global__ void count_set_intersection_kernel(InputIterator1 input_partition_offsets,
+                                                Size           num_partitions,
+                                                InputIterator2 first1,
+                                                InputIterator3 first2,
+                                                OutputIterator result,
+                                                Compare comp)
 {
   // consume partitions
   for(Size partition_idx = blockIdx.x;
@@ -482,13 +482,13 @@ template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIte
 
 template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename InputIterator4, typename OutputIterator, typename Compare>
 __global__
-  void my_set_intersection_kernel(InputIterator1 input_partition_offsets,
-                                  Size           num_partitions,
-                                  InputIterator2 first1,
-                                  InputIterator3 first2,
-                                  InputIterator4 output_partition_offsets,
-                                  OutputIterator result,
-                                  Compare comp)
+  void set_intersection_kernel(InputIterator1 input_partition_offsets,
+                               Size           num_partitions,
+                               InputIterator2 first1,
+                               InputIterator3 first2,
+                               InputIterator4 output_partition_offsets,
+                               OutputIterator result,
+                               Compare comp)
 {
   // consume partitions
   for(Size partition_idx = blockIdx.x;
@@ -547,7 +547,7 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   // find output partition offsets
   // +1 to store the total size of the total
   thrust::detail::temporary_array<difference, System> output_partition_offsets(0, system, num_partitions + 1);
-  set_intersection_detail::my_count_set_intersection_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), comp);
+  set_intersection_detail::count_set_intersection_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), comp);
   cudaError_t error = cudaGetLastError();
   if(error)
   {
@@ -558,7 +558,7 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   thrust::exclusive_scan(output_partition_offsets.begin(), output_partition_offsets.end(), output_partition_offsets.begin(), 0);
 
   // run the set op kernel
-  set_intersection_detail::my_set_intersection_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), result, comp);
+  set_intersection_detail::set_intersection_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), result, comp);
   error = cudaThreadSynchronize();
   if(error)
   {
