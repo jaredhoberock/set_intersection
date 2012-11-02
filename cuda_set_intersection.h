@@ -8,6 +8,8 @@
 #include <thrust/system/cuda/error.h>
 #include <thrust/detail/util/blocking.h>
 #include <thrust/detail/temporary_array.h>
+#include <thrust/detail/cstdint.h>
+#include <thrust/detail/minmax.h>
 #include <vector>
 #include <cassert>
 
@@ -15,18 +17,21 @@ namespace set_intersection_detail
 {
 
 using thrust::system::cuda::detail::detail::uninitialized_array;
+using thrust::detail::uint16_t;
+using thrust::detail::uint32_t;
 
 
-template<typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare>
+// max_input_size <= 32
+template<typename Size, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare>
 inline __device__
-  unsigned int serial_bounded_sparse_set_intersection(int max_input_size,
-                                                      InputIterator1 first1, InputIterator1 last1,
-                                                      InputIterator2 first2, InputIterator2 last2,
-                                                      OutputIterator result,
-                                                      Compare comp)
+  uint32_t serial_bounded_sparse_set_intersection(Size max_input_size,
+                                                  InputIterator1 first1, InputIterator1 last1,
+                                                  InputIterator2 first2, InputIterator2 last2,
+                                                  OutputIterator result,
+                                                  Compare comp)
 {
-  unsigned int active_mask = 0;
-  unsigned int active_bit = 1;
+  uint32_t active_mask = 0;
+  uint32_t active_bit = 1;
 
   while(first1 != last1 && first2 != last2)
   {
@@ -54,14 +59,14 @@ inline __device__
 }
 
 
-template<typename InputIterator1, typename InputIterator2, typename Compare>
+template<typename Size, typename InputIterator1, typename InputIterator2, typename Compare>
 inline __device__
-  unsigned int serial_bounded_count_set_intersection(int max_input_size,
-                                                     InputIterator1 first1, InputIterator1 last1,
-                                                     InputIterator2 first2, InputIterator2 last2,
-                                                     Compare comp)
+  Size serial_bounded_count_set_intersection(Size max_input_size,
+                                             InputIterator1 first1, InputIterator1 last1,
+                                             InputIterator2 first2, InputIterator2 last2,
+                                             Compare comp)
 {
-  unsigned int result = 0;
+  Size result = 0;
 
   while(first1 != last1 && first2 != last2)
   {
@@ -85,14 +90,15 @@ inline __device__
 }
 
 
-template<typename InputIterator, typename OutputIterator>
+// max_input_size <= 32
+template<typename Size, typename InputIterator, typename OutputIterator>
 inline __device__
-  OutputIterator serial_bounded_copy_if(unsigned int max_input_size,
+  OutputIterator serial_bounded_copy_if(Size max_input_size,
                                         InputIterator first,
-                                        unsigned int mask,
+                                        uint32_t mask,
                                         OutputIterator result)
 {
-  for(unsigned int i = 0; i < max_input_size; ++i, ++first)
+  for(Size i = 0; i < max_input_size; ++i, ++first)
   {
     if((1<<i) & mask)
     {
@@ -127,7 +133,7 @@ template<typename Size, typename InputIterator1, typename InputIterator2, typena
   inline __host__ __device__
   thrust::pair<Size,Size> operator()(Size i) const
   {
-    Size diag = min(n1 + n2, i * partition_size);
+    Size diag = thrust::min(n1 + n2, i * partition_size);
 
     // XXX the correctness of balanced_path depends critically on the ll suffix below
     //     why???
@@ -198,7 +204,6 @@ void blockwise_inplace_inclusive_scan(RandomAccessIterator first)
 }
 
 
-// XXX improve this
 template<typename RandomAccessIterator, typename T, typename BinaryFunction>
 inline __device__
 typename thrust::iterator_value<RandomAccessIterator>::type
@@ -282,20 +287,20 @@ T blockwise_right_neighbor(const T &x, const T &boundary)
 }
 
 
-template<int block_size, int work_per_thread, typename InputIterator1, typename InputIterator2, typename Compare>
+template<uint16_t block_size, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename Compare>
 inline __device__
-  unsigned int blockwise_bounded_count_set_intersection_n(InputIterator1 first1, int n1,
-                                                          InputIterator2 first2, int n2,
+  unsigned int blockwise_bounded_count_set_intersection_n(InputIterator1 first1, uint16_t n1,
+                                                          InputIterator2 first2, uint16_t n2,
                                                           Compare comp)
 {
   int thread_idx = threadIdx.x;
 
   // find partition offsets
-  int diag = min(n1 + n2, thread_idx * work_per_thread);
-  thrust::pair<short,short> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
-  thrust::pair<short,short> thread_input_end   = blockwise_right_neighbor<block_size>(thread_input_begin, thrust::make_pair<short,short>(n1,n2));
+  uint16_t diag = thrust::min<uint16_t>(n1 + n2, thread_idx * work_per_thread);
+  thrust::pair<uint16_t,uint16_t> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
+  thrust::pair<uint16_t,uint16_t> thread_input_end   = blockwise_right_neighbor<block_size>(thread_input_begin, thrust::make_pair(n1,n2));
 
-  __shared__ thrust::detail::uint16_t s_thread_output_size[block_size];
+  __shared__ uint16_t s_thread_output_size[block_size];
 
   // work_per_thread + 1 to accomodate a "starred" partition returned from balanced_path above
   s_thread_output_size[thread_idx] =
@@ -312,37 +317,37 @@ inline __device__
 }
 
 
-template<int block_size, int work_per_thread, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare>
+template<uint16_t block_size, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare>
 inline __device__
-  OutputIterator blockwise_bounded_set_intersection_n(InputIterator1 first1, int n1,
-                                                      InputIterator2 first2, int n2,
+  OutputIterator blockwise_bounded_set_intersection_n(InputIterator1 first1, uint16_t n1,
+                                                      InputIterator2 first2, uint16_t n2,
                                                       OutputIterator result,
                                                       Compare comp)
 {
   int thread_idx = threadIdx.x;
   
   // find partition offsets
-  int diag = thrust::min(n1 + n2, thread_idx * work_per_thread);
-  thrust::pair<short,short> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
-  thrust::pair<short,short> thread_input_end   = blockwise_right_neighbor<block_size>(thread_input_begin, thrust::make_pair<short,short>(n1,n2));
+  uint16_t diag = thrust::min<uint16_t>(n1 + n2, thread_idx * work_per_thread);
+  thrust::pair<uint16_t,uint16_t> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
+  thrust::pair<uint16_t,uint16_t> thread_input_end   = blockwise_right_neighbor<block_size>(thread_input_begin, thrust::make_pair(n1,n2));
 
   typedef typename thrust::iterator_value<InputIterator1>::type value_type;
   // +1 to accomodate a "starred" partition returned from balanced_path above
   uninitialized_array<value_type, work_per_thread + 1> sparse_result;
-  unsigned int active_mask =
+  uint32_t active_mask =
     serial_bounded_sparse_set_intersection(work_per_thread + 1,
                                            first1 + thread_input_begin.first,  first1 + thread_input_end.first,
                                            first2 + thread_input_begin.second, first2 + thread_input_end.second,
                                            sparse_result.begin(),
                                            comp);
 
-  __shared__ thrust::detail::uint16_t s_thread_output_size[block_size];
+  __shared__ uint16_t s_thread_output_size[block_size];
   s_thread_output_size[thread_idx] = __popc(active_mask);
 
   __syncthreads();
 
   // scan to turn per-thread counts into output indices
-  thrust::detail::uint16_t block_output_size = blockwise_inplace_exclusive_scan(s_thread_output_size, 0u);
+  uint16_t block_output_size = blockwise_inplace_exclusive_scan(s_thread_output_size, 0u);
 
   serial_bounded_copy_if(work_per_thread + 1, sparse_result.begin(), active_mask, result + s_thread_output_size[thread_idx]);
 
@@ -352,7 +357,7 @@ inline __device__
 }
 
 
-template<int threads_per_block, int work_per_thread, typename InputIterator1, typename InputIterator2, typename InputIterator3, typename OutputIterator, typename Compare>
+template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename InputIterator3, typename OutputIterator, typename Compare>
   __global__ void my_count_set_intersection_kernel(InputIterator1 input_partition_offsets,
                                                    InputIterator2 first1,
                                                    InputIterator3 first2,
@@ -361,12 +366,14 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
 {
   int block_idx = blockIdx.x;
 
-  // each block counts a set op across a partition
-  thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
-  thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
+  typedef typename thrust::iterator_difference<InputIterator2>::type difference;
 
-  thrust::pair<int,int> remaining_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
-                                                                 block_input_end.second - block_input_begin.second);
+  // each block counts a set op across a partition
+  thrust::pair<difference,difference> block_input_begin = input_partition_offsets[block_idx];
+  thrust::pair<difference,difference> block_input_end   = input_partition_offsets[block_idx + 1];
+
+  thrust::pair<difference,difference> remaining_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                                               block_input_end.second - block_input_begin.second);
 
   // advance first1 & first2
   first1 += block_input_begin.first;
@@ -378,9 +385,9 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
   {
     // find the end of this subpartition's input
     // -1 to accomodate "starred" partitions
-    int max_subpartition_size = threads_per_block * work_per_thread - 1;
-    int diag = min(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
-    thrust::pair<int,int> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
+    uint16_t max_subpartition_size = threads_per_block * work_per_thread - 1;
+    difference diag = thrust::min<difference>(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
+    thrust::pair<uint16_t,uint16_t> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
   
     // load the input into __shared__ storage
     typedef typename thrust::iterator_value<InputIterator2>::type value_type;
@@ -409,7 +416,7 @@ template<int threads_per_block, int work_per_thread, typename InputIterator1, ty
 }
 
 
-template<int threads_per_block, int work_per_thread, typename InputIterator1, typename InputIterator2, typename InputIterator3, typename InputIterator4, typename OutputIterator, typename Compare>
+template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename InputIterator3, typename InputIterator4, typename OutputIterator, typename Compare>
 __global__
   void my_set_intersection_kernel(InputIterator1 input_partition_offsets,
                                   InputIterator2 first1,
@@ -420,12 +427,14 @@ __global__
 {
   int block_idx = blockIdx.x;
 
-  // each block does a set op across a partition
-  thrust::pair<int,int> block_input_begin = input_partition_offsets[block_idx];
-  thrust::pair<int,int> block_input_end   = input_partition_offsets[block_idx + 1];
+  typedef typename thrust::iterator_difference<InputIterator2>::type difference;
 
-  thrust::pair<int,int> remaining_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
-                                                                 block_input_end.second - block_input_begin.second);
+  // each block does a set op across a partition
+  thrust::pair<difference,difference> block_input_begin = input_partition_offsets[block_idx];
+  thrust::pair<difference,difference> block_input_end   = input_partition_offsets[block_idx + 1];
+
+  thrust::pair<difference,difference> remaining_input_size = thrust::make_pair(block_input_end.first  - block_input_begin.first,
+                                                                               block_input_end.second - block_input_begin.second);
 
   // advance iterators
   first1 += block_input_begin.first;
@@ -437,9 +446,9 @@ __global__
   {
     // find the end of this subpartition's input
     // -1 to accomodate "starred" partitions
-    int max_subpartition_size = threads_per_block * work_per_thread - 1;
-    int diag = min(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
-    thrust::pair<int,int> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
+    uint16_t max_subpartition_size = threads_per_block * work_per_thread - 1;
+    difference diag = thrust::min<difference>(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
+    thrust::pair<uint16_t,uint16_t> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
     
     // load the input into __shared__ storage
     typedef typename thrust::iterator_value<InputIterator2>::type value_type;
@@ -477,28 +486,30 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   System system;
   using thrust::system::cuda::detail::device_properties;
 
-  const int n1 = last1 - first1;
-  const int n2 = last2 - first2;
+  typedef typename thrust::iterator_difference<InputIterator1>::type difference;
 
-  const int work_per_thread         = 15;
-  const int threads_per_block       = 128;
-  const int work_per_block = threads_per_block * work_per_thread;
+  const difference n1 = last1 - first1;
+  const difference n2 = last2 - first2;
+
+  const thrust::detail::uint16_t work_per_thread   = 15;
+  const thrust::detail::uint16_t threads_per_block = 128;
+  const thrust::detail::uint16_t work_per_block    = threads_per_block * work_per_thread;
 
   // -1 because balanced_path adds a single element to the end of a "starred" partition, increasing its size by one
-  const int maximum_partition_size = work_per_block - 1;
+  const thrust::detail::uint16_t maximum_partition_size = work_per_block - 1;
   //const int max_num_blocks = device_properties().maxGridSize[0];
   //const int num_partitions = min(max_num_blocks, thrust::detail::util::divide_ri(n1 + n2, maximum_partition_size));
-  const int max_num_blocks = device_properties().maxGridSize[0];
-  const int num_partitions = thrust::detail::util::divide_ri(n1 + n2, maximum_partition_size);
+  const difference max_num_blocks = device_properties().maxGridSize[0];
+  const difference num_partitions = thrust::detail::util::divide_ri(n1 + n2, maximum_partition_size);
 
   // find input partition offsets
   // +1 to handle the end of the input elegantly
-  thrust::detail::temporary_array<thrust::pair<int,int>, System> input_partition_offsets(0, system, num_partitions + 1);
-  set_intersection_detail::find_partition_offsets<int>(input_partition_offsets.size(), maximum_partition_size, first1, last1, first2, last2, input_partition_offsets.begin(), comp);
+  thrust::detail::temporary_array<thrust::pair<difference,difference>, System> input_partition_offsets(0, system, num_partitions + 1);
+  set_intersection_detail::find_partition_offsets<difference>(input_partition_offsets.size(), maximum_partition_size, first1, last1, first2, last2, input_partition_offsets.begin(), comp);
 
   // find output partition offsets
   // +1 to store the total size of the total
-  thrust::detail::temporary_array<int, System> output_partition_offsets(0, system, num_partitions + 1);
+  thrust::detail::temporary_array<difference, System> output_partition_offsets(0, system, num_partitions + 1);
   set_intersection_detail::my_count_set_intersection_kernel<threads_per_block,work_per_thread><<<num_partitions,threads_per_block>>>(input_partition_offsets.begin(), first1, first2, output_partition_offsets.begin(), comp);
   cudaError_t error = cudaGetLastError();
   if(error)
