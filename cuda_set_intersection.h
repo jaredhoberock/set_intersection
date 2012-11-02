@@ -233,6 +233,55 @@ inline __device__
 }
 
 
+template<int block_size, typename T>
+inline __device__
+T blockwise_right_neighbor(const T &x, const T &boundary)
+{
+  // stage this shift to conserve smem
+  const unsigned int storage_size = block_size / 2;
+  __shared__ uninitialized_array<T,storage_size> shared;
+
+  T result = x;
+
+  unsigned int tid = threadIdx.x;
+
+  if(0 < tid && tid <= storage_size)
+  {
+    shared[tid - 1] = x;
+  }
+
+  __syncthreads();
+
+  if(tid < storage_size)
+  {
+    result = shared[tid];
+  }
+
+  __syncthreads();
+  
+  tid -= storage_size;
+  if(0 < tid && tid <= storage_size)
+  {
+    shared[tid - 1] = x;
+  }
+  else if(tid == 0)
+  {
+    shared[storage_size-1] = boundary;
+  }
+
+  __syncthreads();
+
+  if(tid < storage_size)
+  {
+    result = shared[tid];
+  }
+
+  __syncthreads();
+
+  return result;
+}
+
+
 template<int block_size, int work_per_thread, typename InputIterator1, typename InputIterator2, typename Compare>
 inline __device__
   unsigned int blockwise_bounded_count_set_intersection_n(InputIterator1 first1, int n1,
@@ -241,24 +290,12 @@ inline __device__
 {
   int thread_idx = threadIdx.x;
 
-  __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
-
   // find partition offsets
   int diag = min(n1 + n2, thread_idx * work_per_thread);
-  s_input_partition_offsets[thread_idx] = balanced_path(first1, n1, first2, n2, diag, 2, comp);
+  thrust::pair<short,short> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
+  thrust::pair<short,short> thread_input_end   = blockwise_right_neighbor<block_size>(thread_input_begin, thrust::make_pair<short,short>(n1,n2));
 
-  if(thread_idx == 0)
-  {
-    s_input_partition_offsets[block_size] = thrust::make_pair(n1,n2);
-  }
-
-  __syncthreads();
-
-  __shared__ unsigned int s_thread_output_size[block_size];
-
-  // serially count a set intersection
-  thrust::pair<int,int> thread_input_begin = s_input_partition_offsets[thread_idx];
-  thrust::pair<int,int> thread_input_end   = s_input_partition_offsets[thread_idx + 1];
+  __shared__ thrust::detail::uint16_t s_thread_output_size[block_size];
 
   // work_per_thread + 1 to accomodate a "starred" partition returned from balanced_path above
   s_thread_output_size[thread_idx] =
@@ -283,22 +320,11 @@ inline __device__
                                                       Compare comp)
 {
   int thread_idx = threadIdx.x;
-
-  __shared__ uninitialized_array<thrust::pair<int,int>, block_size + 1> s_input_partition_offsets;
-
+  
   // find partition offsets
   int diag = thrust::min(n1 + n2, thread_idx * work_per_thread);
-  s_input_partition_offsets[thread_idx] = balanced_path(first1, n1, first2, n2, diag, 2, comp);
-
-  if(thread_idx == 0)
-  {
-    s_input_partition_offsets.back() = thrust::make_pair(n1,n2);
-  }
-
-  __syncthreads();
-
-  thrust::pair<int,int> thread_input_begin = s_input_partition_offsets[thread_idx];
-  thrust::pair<int,int> thread_input_end   = s_input_partition_offsets[thread_idx + 1];
+  thrust::pair<short,short> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
+  thrust::pair<short,short> thread_input_end   = blockwise_right_neighbor<block_size>(thread_input_begin, thrust::make_pair<short,short>(n1,n2));
 
   typedef typename thrust::iterator_value<InputIterator1>::type value_type;
   // +1 to accomodate a "starred" partition returned from balanced_path above
@@ -310,13 +336,13 @@ inline __device__
                                            sparse_result.begin(),
                                            comp);
 
-  __shared__ unsigned int s_thread_output_size[block_size];
+  __shared__ thrust::detail::uint16_t s_thread_output_size[block_size];
   s_thread_output_size[thread_idx] = __popc(active_mask);
 
   __syncthreads();
 
   // scan to turn per-thread counts into output indices
-  unsigned int block_output_size = blockwise_inplace_exclusive_scan(s_thread_output_size, 0u);
+  thrust::detail::uint16_t block_output_size = blockwise_inplace_exclusive_scan(s_thread_output_size, 0u);
 
   serial_bounded_copy_if(work_per_thread + 1, sparse_result.begin(), active_mask, result + s_thread_output_size[thread_idx]);
 
