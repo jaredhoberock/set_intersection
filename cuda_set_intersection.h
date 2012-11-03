@@ -20,6 +20,14 @@ using thrust::system::cuda::detail::detail::uninitialized_array;
 using thrust::detail::uint16_t;
 using thrust::detail::uint32_t;
 
+// empirically determined on sm_20
+// value_types larger than this will fail to launch if placed in smem
+template<typename T>
+  struct stage_through_smem
+{
+  static const bool value = sizeof(T) <= 6 * sizeof(uint32_t);
+};
+
 
 // max_input_size <= 32
 template<typename Size, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare>
@@ -379,16 +387,25 @@ inline __device__
     difference diag = thrust::min<difference>(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
     thrust::pair<uint16_t,uint16_t> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
   
-    // load the input into __shared__ storage
     typedef typename thrust::iterator_value<InputIterator2>::type value_type;
-    __shared__ uninitialized_array<value_type, block_size * work_per_thread> s_input;
+    if(stage_through_smem<value_type>::value)
+    {
+      // load the input into __shared__ storage
+      __shared__ uninitialized_array<value_type, block_size * work_per_thread> s_input;
   
-    value_type *s_input_end1 = blockwise_copy_n(first1, subpartition_size.first,  s_input.begin());
-    value_type *s_input_end2 = blockwise_copy_n(first2, subpartition_size.second, s_input_end1);
+      value_type *s_input_end1 = blockwise_copy_n(first1, subpartition_size.first,  s_input.begin());
+      value_type *s_input_end2 = blockwise_copy_n(first2, subpartition_size.second, s_input_end1);
   
-    result += blockwise_bounded_count_set_intersection_n<block_size,work_per_thread>(s_input.begin(), subpartition_size.first,
-                                                                                     s_input_end1,    subpartition_size.second,
-                                                                                     comp);
+      result += blockwise_bounded_count_set_intersection_n<block_size,work_per_thread>(s_input.begin(), subpartition_size.first,
+                                                                                       s_input_end1,    subpartition_size.second,
+                                                                                       comp);
+    }
+    else
+    {
+      result += blockwise_bounded_count_set_intersection_n<block_size,work_per_thread>(first1, subpartition_size.first,
+                                                                                       first2, subpartition_size.second,
+                                                                                       comp);
+    }
 
     // advance input
     first1 += subpartition_size.first;
@@ -423,18 +440,28 @@ OutputIterator blockwise_set_intersection(InputIterator1 first1, InputIterator2 
     difference diag = thrust::min<difference>(remaining_input_size.first + remaining_input_size.second, max_subpartition_size);
     thrust::pair<uint16_t,uint16_t> subpartition_size = balanced_path(first1, remaining_input_size.first, first2, remaining_input_size.second, diag, 4ll, comp);
     
-    // load the input into __shared__ storage
     typedef typename thrust::iterator_value<InputIterator2>::type value_type;
-    __shared__ uninitialized_array<value_type, block_size * work_per_thread> s_input;
-
-    value_type *s_input_end1 = blockwise_copy_n(first1, subpartition_size.first,  s_input.begin());
-    value_type *s_input_end2 = blockwise_copy_n(first2, subpartition_size.second, s_input_end1);
-
-    result = blockwise_bounded_set_intersection_n<block_size,work_per_thread>(s_input.begin(), subpartition_size.first,
-                                                                              s_input_end1,    subpartition_size.second,
-                                                                              result,
-                                                                              comp);
-
+    if(stage_through_smem<value_type>::value)
+    {
+      // load the input into __shared__ storage
+      __shared__ uninitialized_array<value_type, block_size * work_per_thread> s_input;
+  
+      value_type *s_input_end1 = blockwise_copy_n(first1, subpartition_size.first,  s_input.begin());
+      value_type *s_input_end2 = blockwise_copy_n(first2, subpartition_size.second, s_input_end1);
+  
+      result = blockwise_bounded_set_intersection_n<block_size,work_per_thread>(s_input.begin(), subpartition_size.first,
+                                                                                s_input_end1,    subpartition_size.second,
+                                                                                result,
+                                                                                comp);
+    }
+    else
+    {
+      result = blockwise_bounded_set_intersection_n<block_size,work_per_thread>(first1, subpartition_size.first,
+                                                                                first2, subpartition_size.second,
+                                                                                result,
+                                                                                comp);
+    }
+  
     // advance input
     first1 += subpartition_size.first;
     first2 += subpartition_size.second;
@@ -541,8 +568,7 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   thrust::detail::temporary_array<thrust::pair<difference,difference>, System> input_partition_offsets(0, system, num_partitions + 1);
   set_intersection_detail::find_partition_offsets<difference>(input_partition_offsets.size(), maximum_partition_size, first1, last1, first2, last2, input_partition_offsets.begin(), comp);
 
-  const difference max_num_blocks = device_properties().maxGridSize[0];
-  const difference num_blocks = thrust::min(max_num_blocks, num_partitions);
+  const difference num_blocks = thrust::min<difference>(device_properties().maxGridSize[0], num_partitions);
 
   // find output partition offsets
   // +1 to store the total size of the total
