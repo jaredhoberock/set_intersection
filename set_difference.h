@@ -99,6 +99,7 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
                                      OutputIterator result,
                                      Compare comp)
 {
-  return set_operation(first1, last1, first2, last2, result, comp, set_difference_detail::serial_bounded_set_difference());
+  thrust::cuda::tag par;
+  return set_operation(par, first1, last1, first2, last2, result, comp, set_difference_detail::serial_bounded_set_difference());
 }
 

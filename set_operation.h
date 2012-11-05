@@ -6,6 +6,7 @@
 #include <thrust/pair.h>
 #include <thrust/system/cuda/detail/detail/uninitialized.h>
 #include <thrust/system/cuda/error.h>
+#include <thrust/system/cuda/detail/tag.h>
 #include <thrust/detail/util/blocking.h>
 #include <thrust/detail/temporary_array.h>
 #include <thrust/detail/cstdint.h>
@@ -483,15 +484,14 @@ __global__
 } // end set_operation_detail
 
 
-template<typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare, typename SetOperation>
-  OutputIterator set_operation(InputIterator1 first1, InputIterator1 last1,
+template<typename System, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare, typename SetOperation>
+  OutputIterator set_operation(thrust::cuda::dispatchable<System> &system,
+                               InputIterator1 first1, InputIterator1 last1,
                                InputIterator2 first2, InputIterator2 last2,
                                OutputIterator result,
                                Compare comp,
                                SetOperation set_op)
 {
-  typedef thrust::cuda::tag System;
-  System system;
   using thrust::system::cuda::detail::device_properties;
 
   typedef typename thrust::iterator_difference<InputIterator1>::type difference;
@@ -525,7 +525,7 @@ template<typename InputIterator1, typename InputIterator2, typename OutputIterat
   }
 
   // turn the counts into offsets
-  thrust::exclusive_scan(output_partition_offsets.begin(), output_partition_offsets.end(), output_partition_offsets.begin(), 0);
+  thrust::exclusive_scan(system, output_partition_offsets.begin(), output_partition_offsets.end(), output_partition_offsets.begin(), 0);
 
   // run the set op kernel
   set_operation_detail::set_operation_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), result, comp, set_op);
