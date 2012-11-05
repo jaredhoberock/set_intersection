@@ -186,7 +186,7 @@ inline __device__
 }
 
 
-template<int block_size, typename T>
+template<unsigned int block_size, typename T>
 inline __device__
 T right_neighbor(statically_blocked_thread_array<block_size> &ctx, const T &x, const T &boundary)
 {
@@ -435,16 +435,15 @@ OutputIterator set_operation(statically_blocked_thread_array<block_size> &ctx,
 
 
 template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename OutputIterator, typename Compare, typename SetOperation>
-  __global__ void count_set_operation_kernel(InputIterator1 input_partition_offsets,
-                                             Size           num_partitions,
-                                             InputIterator2 first1,
-                                             InputIterator3 first2,
-                                             OutputIterator result,
-                                             Compare comp,
-                                             SetOperation set_op)
+  inline __device__ void count_set_operation(statically_blocked_thread_array<threads_per_block> &ctx,
+                                             InputIterator1                                      input_partition_offsets,
+                                             Size                                                num_partitions,
+                                             InputIterator2                                      first1,
+                                             InputIterator3                                      first2,
+                                             OutputIterator                                      result,
+                                             Compare                                             comp,
+                                             SetOperation                                        set_op)
 {
-  statically_blocked_thread_array<threads_per_block> ctx;
-
   // consume partitions
   for(Size partition_idx = ctx.block_index();
       partition_idx < num_partitions;
@@ -471,19 +470,70 @@ template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIte
 }
 
 
-template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename InputIterator4, typename OutputIterator, typename Compare, typename SetOperation>
-__global__
-  void set_operation_kernel(InputIterator1 input_partition_offsets,
-                            Size           num_partitions,
-                            InputIterator2 first1,
-                            InputIterator3 first2,
-                            InputIterator4 output_partition_offsets,
-                            OutputIterator result,
-                            Compare comp,
-                            SetOperation set_op)
+template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename OutputIterator, typename Compare, typename SetOperation>
+  struct count_set_operation_closure
 {
-  statically_blocked_thread_array<threads_per_block> ctx;
+  typedef statically_blocked_thread_array<threads_per_block> context_type;
 
+  InputIterator1 input_partition_offsets;
+  Size           num_partitions;
+  InputIterator2 first1;
+  InputIterator3 first2;
+  OutputIterator result;
+  Compare        comp;
+  SetOperation   set_op;
+
+  count_set_operation_closure(InputIterator1 input_partition_offsets,
+                              Size           num_partitions,
+                              InputIterator2 first1,
+                              InputIterator3 first2,
+                              OutputIterator result,
+                              Compare        comp,
+                              SetOperation   set_op)
+    : input_partition_offsets(input_partition_offsets),
+      num_partitions(num_partitions),
+      first1(first1),
+      first2(first2),
+      result(result),
+      comp(comp),
+      set_op(set_op)
+  {}
+
+  inline __device__ void operator()() const
+  {
+    context_type ctx;
+    count_set_operation<threads_per_block,work_per_thread>(ctx, input_partition_offsets, num_partitions, first1, first2, result, comp, set_op);
+  }
+};
+
+
+template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename OutputIterator, typename Compare, typename SetOperation>
+  count_set_operation_closure<threads_per_block,work_per_thread,InputIterator1,Size,InputIterator2,InputIterator3,OutputIterator,Compare,SetOperation>
+    make_count_set_operation_closure(InputIterator1 input_partition_offsets,
+                                     Size           num_partitions,
+                                     InputIterator2 first1,
+                                     InputIterator3 first2,
+                                     OutputIterator result,
+                                     Compare        comp,
+                                     SetOperation   set_op)
+{
+  typedef count_set_operation_closure<threads_per_block,work_per_thread,InputIterator1,Size,InputIterator2,InputIterator3,OutputIterator,Compare,SetOperation> result_type;
+  return result_type(input_partition_offsets,num_partitions,first1,first2,result,comp,set_op);
+}
+
+
+template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename InputIterator4, typename OutputIterator, typename Compare, typename SetOperation>
+inline __device__
+  void set_operation(statically_blocked_thread_array<threads_per_block> &ctx,
+                     InputIterator1                                      input_partition_offsets,
+                     Size                                                num_partitions,
+                     InputIterator2                                      first1,
+                     InputIterator3                                      first2,
+                     InputIterator4                                      output_partition_offsets,
+                     OutputIterator                                      result,
+                     Compare                                             comp,
+                     SetOperation                                        set_op)
+{
   // consume partitions
   for(Size partition_idx = ctx.block_index();
       partition_idx < num_partitions;
@@ -506,6 +556,62 @@ __global__
 }
 
 
+template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename InputIterator4, typename OutputIterator, typename Compare, typename SetOperation>
+  struct set_operation_closure
+{
+  typedef statically_blocked_thread_array<threads_per_block> context_type;
+
+  InputIterator1 input_partition_offsets;
+  Size           num_partitions;
+  InputIterator2 first1;
+  InputIterator3 first2;
+  InputIterator4 output_partition_offsets;
+  OutputIterator result;
+  Compare        comp;
+  SetOperation   set_op;
+
+  set_operation_closure(InputIterator1 input_partition_offsets,
+                        Size           num_partitions,
+                        InputIterator2 first1,
+                        InputIterator3 first2,
+                        InputIterator4 output_partition_offsets,
+                        OutputIterator result,
+                        Compare        comp,
+                        SetOperation   set_op)
+    : input_partition_offsets(input_partition_offsets),
+      num_partitions(num_partitions),
+      first1(first1),
+      first2(first2),
+      output_partition_offsets(output_partition_offsets),
+      result(result),
+      comp(comp),
+      set_op(set_op)
+  {}
+
+  inline __device__ void operator()() const
+  {
+    context_type ctx;
+    set_operation<threads_per_block,work_per_thread>(ctx, input_partition_offsets, num_partitions, first1, first2, output_partition_offsets, result, comp, set_op);
+  }
+};
+
+
+template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename InputIterator4, typename OutputIterator, typename Compare, typename SetOperation>
+  set_operation_closure<threads_per_block,work_per_thread,InputIterator1,Size,InputIterator2,InputIterator3,InputIterator4,OutputIterator,Compare,SetOperation>
+    make_set_operation_closure(InputIterator1 input_partition_offsets,
+                               Size           num_partitions,
+                               InputIterator2 first1,
+                               InputIterator3 first2,
+                               InputIterator4 output_partition_offsets,
+                               OutputIterator result,
+                               Compare        comp,
+                               SetOperation   set_op)
+{
+  typedef set_operation_closure<threads_per_block,work_per_thread,InputIterator1,Size,InputIterator2,InputIterator3,InputIterator4,OutputIterator,Compare,SetOperation> result_type;
+  return result_type(input_partition_offsets,num_partitions,first1,first2,output_partition_offsets,result,comp,set_op);
+}
+
+
 } // end set_operation_detail
 
 
@@ -518,6 +624,8 @@ template<typename System, typename InputIterator1, typename InputIterator2, type
                                SetOperation set_op)
 {
   using thrust::system::cuda::detail::device_properties;
+  using thrust::system::cuda::detail::detail::launch_closure;
+  using namespace set_operation_detail;
 
   typedef typename thrust::iterator_difference<InputIterator1>::type difference;
 
@@ -542,23 +650,17 @@ template<typename System, typename InputIterator1, typename InputIterator2, type
   // find output partition offsets
   // +1 to store the total size of the total
   thrust::detail::temporary_array<difference, System> output_partition_offsets(0, system, num_partitions + 1);
-  set_operation_detail::count_set_operation_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), comp, set_op);
-  cudaError_t error = cudaGetLastError();
-  if(error)
-  {
-    throw thrust::system_error(error, thrust::cuda_category(), std::string("CUDA error after my_count_set_operation_kernel"));
-  }
+  launch_closure(make_count_set_operation_closure<threads_per_block,work_per_thread>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), comp, set_op),
+                 num_blocks,
+                 threads_per_block);
 
-  // turn the counts into offsets
+  // turn the output partition counts into offsets to output partitions
   thrust::exclusive_scan(system, output_partition_offsets.begin(), output_partition_offsets.end(), output_partition_offsets.begin());
 
   // run the set op kernel
-  set_operation_detail::set_operation_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), result, comp, set_op);
-  error = cudaThreadSynchronize();
-  if(error)
-  {
-    throw thrust::system_error(error, thrust::cuda_category(), std::string("CUDA error after my_set_operation_kernel"));
-  }
+  launch_closure(make_set_operation_closure<threads_per_block,work_per_thread>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), result, comp, set_op),
+                 num_blocks,
+                 threads_per_block);
 
   return result + output_partition_offsets[num_partitions];
 }
