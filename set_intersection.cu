@@ -2,7 +2,7 @@
 #include <thrust/device_vector.h>
 #include <iostream>
 #include "utility.h"
-#include "cuda_set_intersection.h"
+#include "set_intersection.h"
 #include "time_invocation_cuda.hpp"
 
 
