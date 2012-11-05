@@ -104,9 +104,13 @@ template<typename Size, typename System, typename InputIterator1, typename Input
 }
 
 
+namespace block
+{
+
+
 template<typename Context, typename RandomAccessIterator1, typename Size, typename RandomAccessIterator2>
 inline __device__
-RandomAccessIterator2 blockwise_copy_n(Context &ctx, RandomAccessIterator1 first, Size n, RandomAccessIterator2 result)
+RandomAccessIterator2 copy_n(Context &ctx, RandomAccessIterator1 first, Size n, RandomAccessIterator2 result)
 {
   for(Size i = ctx.thread_index(); i < n; i += ctx.block_dimension())
   {
@@ -121,7 +125,7 @@ RandomAccessIterator2 blockwise_copy_n(Context &ctx, RandomAccessIterator1 first
 
 template<typename Context, typename RandomAccessIterator, typename BinaryFunction>
 inline __device__
-void blockwise_inplace_inclusive_scan(Context &ctx, RandomAccessIterator first, BinaryFunction op)
+void inplace_inclusive_scan(Context &ctx, RandomAccessIterator first, BinaryFunction op)
 {
   typename thrust::iterator_value<RandomAccessIterator>::type x = first[threadIdx.x];
 
@@ -143,19 +147,19 @@ void blockwise_inplace_inclusive_scan(Context &ctx, RandomAccessIterator first, 
 
 template<typename Context, typename RandomAccessIterator>
 inline __device__
-void blockwise_inplace_inclusive_scan(Context &ctx, RandomAccessIterator first)
+void inplace_inclusive_scan(Context &ctx, RandomAccessIterator first)
 {
-  blockwise_inplace_inclusive_scan(ctx, first, thrust::plus<typename thrust::iterator_value<RandomAccessIterator>::type>());
+  block::inplace_inclusive_scan(ctx, first, thrust::plus<typename thrust::iterator_value<RandomAccessIterator>::type>());
 }
 
 
 template<typename Context, typename RandomAccessIterator, typename T, typename BinaryFunction>
 inline __device__
 typename thrust::iterator_value<RandomAccessIterator>::type
-  blockwise_inplace_exclusive_scan(Context &ctx, RandomAccessIterator first, T init, BinaryFunction op)
+  inplace_exclusive_scan(Context &ctx, RandomAccessIterator first, T init, BinaryFunction op)
 {
   // perform an inclusive scan, then shift right
-  blockwise_inplace_inclusive_scan(ctx, first, op);
+  block::inplace_inclusive_scan(ctx, first, op);
 
   typename thrust::iterator_value<RandomAccessIterator>::type carry = first[ctx.block_dimension() - 1];
 
@@ -173,19 +177,18 @@ typename thrust::iterator_value<RandomAccessIterator>::type
 }
 
 
-
 template<typename Context, typename Iterator, typename T>
 inline __device__
   typename thrust::iterator_value<Iterator>::type
-    blockwise_inplace_exclusive_scan(Context &ctx, Iterator first, T init)
+    inplace_exclusive_scan(Context &ctx, Iterator first, T init)
 {
-  return blockwise_inplace_exclusive_scan(ctx, first, init, thrust::plus<typename thrust::iterator_value<Iterator>::type>());
+  return block::inplace_exclusive_scan(ctx, first, init, thrust::plus<typename thrust::iterator_value<Iterator>::type>());
 }
 
 
 template<int block_size, typename T>
 inline __device__
-T blockwise_right_neighbor(statically_blocked_thread_array<block_size> &ctx, const T &x, const T &boundary)
+T right_neighbor(statically_blocked_thread_array<block_size> &ctx, const T &x, const T &boundary)
 {
   // stage this shift to conserve smem
   const unsigned int storage_size = block_size / 2;
@@ -234,18 +237,18 @@ T blockwise_right_neighbor(statically_blocked_thread_array<block_size> &ctx, con
 
 template<uint16_t block_size, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename Compare, typename SetOperation>
 inline __device__
-  unsigned int blockwise_bounded_count_set_operation_n(statically_blocked_thread_array<block_size> &ctx,
-                                                       InputIterator1 first1, uint16_t n1,
-                                                       InputIterator2 first2, uint16_t n2,
-                                                       Compare comp,
-                                                       SetOperation set_op)
+  unsigned int bounded_count_set_operation_n(statically_blocked_thread_array<block_size> &ctx,
+                                             InputIterator1 first1, uint16_t n1,
+                                             InputIterator2 first2, uint16_t n2,
+                                             Compare comp,
+                                             SetOperation set_op)
 {
   unsigned int thread_idx = ctx.thread_index();
 
   // find partition offsets
   uint16_t diag = thrust::min<uint16_t>(n1 + n2, thread_idx * work_per_thread);
   thrust::pair<uint16_t,uint16_t> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
-  thrust::pair<uint16_t,uint16_t> thread_input_end   = blockwise_right_neighbor<block_size>(ctx, thread_input_begin, thrust::make_pair(n1,n2));
+  thrust::pair<uint16_t,uint16_t> thread_input_end   = block::right_neighbor<block_size>(ctx, thread_input_begin, thrust::make_pair(n1,n2));
 
   __shared__ uint16_t s_thread_output_size[block_size];
 
@@ -259,26 +262,26 @@ inline __device__
   ctx.barrier();
 
   // reduce per-thread counts
-  blockwise_inplace_inclusive_scan(ctx, s_thread_output_size);
+  block::inplace_inclusive_scan(ctx, s_thread_output_size);
   return s_thread_output_size[blockDim.x - 1];
 }
 
 
 template<uint16_t block_size, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare, typename SetOperation>
 inline __device__
-  OutputIterator blockwise_bounded_set_operation_n(statically_blocked_thread_array<block_size> &ctx,
-                                                   InputIterator1 first1, uint16_t n1,
-                                                   InputIterator2 first2, uint16_t n2,
-                                                   OutputIterator result,
-                                                   Compare comp,
-                                                   SetOperation set_op)
+  OutputIterator bounded_set_operation_n(statically_blocked_thread_array<block_size> &ctx,
+                                         InputIterator1 first1, uint16_t n1,
+                                         InputIterator2 first2, uint16_t n2,
+                                         OutputIterator result,
+                                         Compare comp,
+                                         SetOperation set_op)
 {
   unsigned int thread_idx = ctx.thread_index();
   
   // find partition offsets
   uint16_t diag = thrust::min<uint16_t>(n1 + n2, thread_idx * work_per_thread);
   thrust::pair<uint16_t,uint16_t> thread_input_begin = balanced_path(first1, n1, first2, n2, diag, 2, comp);
-  thrust::pair<uint16_t,uint16_t> thread_input_end   = blockwise_right_neighbor<block_size>(ctx, thread_input_begin, thrust::make_pair(n1,n2));
+  thrust::pair<uint16_t,uint16_t> thread_input_end   = block::right_neighbor<block_size>(ctx, thread_input_begin, thrust::make_pair(n1,n2));
 
   typedef typename thrust::iterator_value<InputIterator1>::type value_type;
   // +1 to accomodate a "starred" partition returned from balanced_path above
@@ -296,7 +299,7 @@ inline __device__
   ctx.barrier();
 
   // scan to turn per-thread counts into output indices
-  uint16_t block_output_size = blockwise_inplace_exclusive_scan(ctx, s_thread_output_size, 0u);
+  uint16_t block_output_size = block::inplace_exclusive_scan(ctx, s_thread_output_size, 0u);
 
   serial_bounded_copy_if(work_per_thread + 1, sparse_result.begin(), active_mask, result + s_thread_output_size[thread_idx]);
 
@@ -309,11 +312,11 @@ inline __device__
 template<uint16_t block_size, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename Compare, typename SetOperation>
 inline __device__
   typename thrust::iterator_difference<InputIterator1>::type
-    blockwise_count_set_operation(statically_blocked_thread_array<block_size> &ctx,
-                                  InputIterator1 first1, InputIterator1 last1,
-                                  InputIterator2 first2, InputIterator2 last2,
-                                  Compare comp,
-                                  SetOperation set_op)
+    count_set_operation(statically_blocked_thread_array<block_size> &ctx,
+                        InputIterator1 first1, InputIterator1 last1,
+                        InputIterator2 first2, InputIterator2 last2,
+                        Compare comp,
+                        SetOperation set_op)
 {
   typedef typename thrust::iterator_difference<InputIterator1>::type difference;
 
@@ -336,22 +339,22 @@ inline __device__
       // load the input into __shared__ storage
       __shared__ uninitialized_array<value_type, block_size * work_per_thread> s_input;
   
-      value_type *s_input_end1 = blockwise_copy_n(ctx, first1, subpartition_size.first,  s_input.begin());
-      value_type *s_input_end2 = blockwise_copy_n(ctx, first2, subpartition_size.second, s_input_end1);
+      value_type *s_input_end1 = block::copy_n(ctx, first1, subpartition_size.first,  s_input.begin());
+      value_type *s_input_end2 = block::copy_n(ctx, first2, subpartition_size.second, s_input_end1);
   
-      result += blockwise_bounded_count_set_operation_n<block_size,work_per_thread>(ctx,
-                                                                                    s_input.begin(), subpartition_size.first,
-                                                                                    s_input_end1,    subpartition_size.second,
-                                                                                    comp,
-                                                                                    set_op);
+      result += block::bounded_count_set_operation_n<block_size,work_per_thread>(ctx,
+                                                                                 s_input.begin(), subpartition_size.first,
+                                                                                 s_input_end1,    subpartition_size.second,
+                                                                                 comp,
+                                                                                 set_op);
     }
     else
     {
-      result += blockwise_bounded_count_set_operation_n<block_size,work_per_thread>(ctx,
-                                                                                    first1, subpartition_size.first,
-                                                                                    first2, subpartition_size.second,
-                                                                                    comp,
-                                                                                    set_op);
+      result += block::bounded_count_set_operation_n<block_size,work_per_thread>(ctx,
+                                                                                 first1, subpartition_size.first,
+                                                                                 first2, subpartition_size.second,
+                                                                                 comp,
+                                                                                 set_op);
     }
 
     // advance input
@@ -369,12 +372,12 @@ inline __device__
 
 template<uint16_t block_size, uint16_t work_per_thread, typename InputIterator1, typename InputIterator2, typename OutputIterator, typename Compare, typename SetOperation>
 inline __device__
-OutputIterator blockwise_set_operation(statically_blocked_thread_array<block_size> &ctx,
-                                       InputIterator1 first1, InputIterator2 last1,
-                                       InputIterator2 first2, InputIterator2 last2,
-                                       OutputIterator result,
-                                       Compare comp,
-                                       SetOperation set_op)
+OutputIterator set_operation(statically_blocked_thread_array<block_size> &ctx,
+                             InputIterator1 first1, InputIterator2 last1,
+                             InputIterator2 first2, InputIterator2 last2,
+                             OutputIterator result,
+                             Compare comp,
+                             SetOperation set_op)
 {
   typedef typename thrust::iterator_difference<InputIterator1>::type difference;
 
@@ -395,24 +398,24 @@ OutputIterator blockwise_set_operation(statically_blocked_thread_array<block_siz
       // load the input into __shared__ storage
       __shared__ uninitialized_array<value_type, block_size * work_per_thread> s_input;
   
-      value_type *s_input_end1 = blockwise_copy_n(ctx, first1, subpartition_size.first,  s_input.begin());
-      value_type *s_input_end2 = blockwise_copy_n(ctx, first2, subpartition_size.second, s_input_end1);
+      value_type *s_input_end1 = block::copy_n(ctx, first1, subpartition_size.first,  s_input.begin());
+      value_type *s_input_end2 = block::copy_n(ctx, first2, subpartition_size.second, s_input_end1);
   
-      result = blockwise_bounded_set_operation_n<block_size,work_per_thread>(ctx,
-                                                                             s_input.begin(), subpartition_size.first,
-                                                                             s_input_end1,    subpartition_size.second,
-                                                                             result,
-                                                                             comp,
-                                                                             set_op);
+      result = block::bounded_set_operation_n<block_size,work_per_thread>(ctx,
+                                                                          s_input.begin(), subpartition_size.first,
+                                                                          s_input_end1,    subpartition_size.second,
+                                                                          result,
+                                                                          comp,
+                                                                          set_op);
     }
     else
     {
-      result = blockwise_bounded_set_operation_n<block_size,work_per_thread>(ctx,
-                                                                             first1, subpartition_size.first,
-                                                                             first2, subpartition_size.second,
-                                                                             result,
-                                                                             comp,
-                                                                             set_op);
+      result = block::bounded_set_operation_n<block_size,work_per_thread>(ctx,
+                                                                          first1, subpartition_size.first,
+                                                                          first2, subpartition_size.second,
+                                                                          result,
+                                                                          comp,
+                                                                          set_op);
     }
   
     // advance input
@@ -426,6 +429,9 @@ OutputIterator blockwise_set_operation(statically_blocked_thread_array<block_siz
 
   return result;
 }
+
+
+} // end namespace block
 
 
 template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIterator1, typename Size, typename InputIterator2, typename InputIterator3, typename OutputIterator, typename Compare, typename SetOperation>
@@ -451,11 +457,11 @@ template<uint16_t threads_per_block, uint16_t work_per_thread, typename InputIte
     thrust::pair<difference,difference> block_input_end   = input_partition_offsets[partition_idx + 1];
 
     // count the size of the set operation
-    difference count = blockwise_count_set_operation<threads_per_block,work_per_thread>(ctx,
-                                                                                        first1 + block_input_begin.first,  first1 + block_input_end.first,
-                                                                                        first2 + block_input_begin.second, first2 + block_input_end.second,
-                                                                                        comp,
-                                                                                        set_op);
+    difference count = block::count_set_operation<threads_per_block,work_per_thread>(ctx,
+                                                                                     first1 + block_input_begin.first,  first1 + block_input_end.first,
+                                                                                     first2 + block_input_begin.second, first2 + block_input_end.second,
+                                                                                     comp,
+                                                                                     set_op);
 
     if(threadIdx.x == 0)
     {
@@ -490,12 +496,12 @@ __global__
     thrust::pair<difference,difference> block_input_end   = input_partition_offsets[partition_idx + 1];
 
     // do the set operation across the partition
-    blockwise_set_operation<threads_per_block,work_per_thread>(ctx,
-                                                               first1 + block_input_begin.first,  first1 + block_input_end.first,
-                                                               first2 + block_input_begin.second, first2 + block_input_end.second,
-                                                               result + output_partition_offsets[partition_idx],
-                                                               comp,
-                                                               set_op);
+    block::set_operation<threads_per_block,work_per_thread>(ctx,
+                                                            first1 + block_input_begin.first,  first1 + block_input_end.first,
+                                                            first2 + block_input_begin.second, first2 + block_input_end.second,
+                                                            result + output_partition_offsets[partition_idx],
+                                                            comp,
+                                                            set_op);
   }
 }
 
