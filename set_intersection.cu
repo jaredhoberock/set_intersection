@@ -5,6 +5,23 @@
 #include "cuda_set_intersection.h"
 #include "time_invocation_cuda.hpp"
 
+
+namespace my
+{
+
+template<typename T>
+struct random
+{
+  template<typename RNG>
+  T operator()(RNG rand)
+  {
+    return rand();
+  }
+};
+
+}
+
+
 template<typename T>
 void test(int size)
 {
@@ -16,14 +33,18 @@ void test(int size)
   Compare comp;
 
   thrust::device_vector<T> a, b;
-  random_sorted_vector(a_size, comp, a);
-  random_sorted_vector(b_size, comp, b);
+  random_sorted_vector(a_size, comp, a, my::random<T>());
+  random_sorted_vector(b_size, comp, b, my::random<T>());
 
   thrust::device_vector<T> o(input_size, T(13));
 
   o.erase(my_set_intersection(a.begin(), a.end(), b.begin(), b.end(), o.begin(), comp), o.end());
 
-  verify(a, b, o, comp);
+  thrust::host_vector<T> h_a = a, h_b = b;
+  thrust::host_vector<T> reference(input_size, T(13));
+  reference.erase(std::set_intersection(h_a.begin(), h_a.end(), h_b.begin(), h_b.end(), reference.begin(), comp), reference.end());
+
+  verify(reference, a, b, o);
 
   std::cout << "test(" << size << ") done" << std::endl;
 
@@ -39,6 +60,54 @@ void test(int size)
   double megakeys_per_second = megakeys  / seconds;
   std::cout << "  Throughput: " << megakeys_per_second << " Mkeys/s" << std::endl
             << std::endl;
+}
+
+namespace my
+{
+
+template<typename T>
+struct random<thrust::tuple<T,T> >
+{
+  template<typename RNG>
+  thrust::tuple<T,T> operator()(RNG rand)
+  {
+    return thrust::make_tuple(rand(),rand());
+  }
+};
+
+
+template<typename T>
+struct random<thrust::tuple<T,T,T> >
+{
+  template<typename RNG>
+  thrust::tuple<T,T,T> operator()(RNG rand)
+  {
+    return thrust::make_tuple(rand(),rand(),rand());
+  }
+};
+
+
+template<typename T>
+struct random<thrust::tuple<T,T,T,T> >
+{
+  template<typename RNG>
+  thrust::tuple<T,T,T,T> operator()(RNG rand)
+  {
+    return thrust::make_tuple(rand(),rand(),rand(),rand());
+  }
+};
+
+
+template<typename T>
+struct random<thrust::tuple<T,T,T,T,T> >
+{
+  template<typename RNG>
+  thrust::tuple<T,T,T,T,T> operator()(RNG rand)
+  {
+    return thrust::make_tuple(rand(),rand(),rand(),rand(),rand());
+  }
+};
+
 }
 
 
@@ -68,6 +137,8 @@ int main(int argc, char** argv)
       ++i)
   {
     test<int>(*i);
+    //test<thrust::tuple<double,double,double,double,double> >(*i);
+    //test<thrust::tuple<uint64_t,uint64_t,uint64_t,char> >(*i);
   }
 
   return 0;
