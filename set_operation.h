@@ -525,7 +525,7 @@ template<typename System, typename InputIterator1, typename InputIterator2, type
   }
 
   // turn the counts into offsets
-  thrust::exclusive_scan(system, output_partition_offsets.begin(), output_partition_offsets.end(), output_partition_offsets.begin(), 0);
+  thrust::exclusive_scan(system, output_partition_offsets.begin(), output_partition_offsets.end(), output_partition_offsets.begin());
 
   // run the set op kernel
   set_operation_detail::set_operation_kernel<threads_per_block,work_per_thread><<<num_blocks,threads_per_block>>>(input_partition_offsets.begin(), num_partitions, first1, first2, output_partition_offsets.begin(), result, comp, set_op);
